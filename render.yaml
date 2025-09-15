@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: ctai-ctd-backend
+    env: docker
+    plan: free
+    rootDir: .
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: HF_REPO_ID
+        value: abir221/ctai-ctd-backend-models
+      # only if the HF repo is private:
+      # - key: HF_TOKEN
+      #   sync: false
