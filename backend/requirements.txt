@@ -6,3 +6,4 @@ numpy
 pandas
 joblib
 huggingface_hub
+openai
