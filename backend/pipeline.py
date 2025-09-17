@@ -1,121 +1,101 @@
-# backend/pipeline.py
 import os
-import re
-import warnings
 import numpy as np
-import pandas as pd
 import joblib
-from scipy.sparse import hstack  # CPU sparse hstack
 
-# ------------------------------------------------------------
-# Version guard (prevents InconsistentVersionWarning at import)
-# ------------------------------------------------------------
-try:
-    import sklearn
-    if sklearn.__version__ != "1.7.2":
-        warnings.warn(
-            f"[pipeline] scikit-learn {sklearn.__version__} detected; "
-            "artifacts were saved with 1.7.2. Consider `pip install scikit-learn==1.7.2` "
-            "to avoid compatibility issues."
-        )
-except Exception:
-    pass
+# Path to HF-downloaded models (Dockerfile sets this up)
+MODEL_DIR = os.environ.get("HF_CACHE_DIR", "/app/models_cache")
 
-# ------------------- Paths -------------------
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "models")
+# ----------------------------
+# Load TF-IDF vocab + idf (GPU-exported)
+# ----------------------------
+def load_tfidf_npz(path):
+    """Load TF-IDF vocab/idf exported from cuML."""
+    npz = np.load(path, allow_pickle=True)
+    vocab = dict(zip(npz["toks"], npz["ids"]))
+    idf = npz["idf"] if "idf" in npz.files else None
+    return vocab, idf
 
-# ------------------- Helpers (match training) -------------------
-_ws_rx = re.compile(r"\s+")
+tfidf_word_vocab, tfidf_word_idf = load_tfidf_npz(
+    os.path.join(MODEL_DIR, "tfidf_word_cuml_v1.npz")
+)
+tfidf_char_vocab, tfidf_char_idf = load_tfidf_npz(
+    os.path.join(MODEL_DIR, "tfidf_char_cuml_v1.npz")
+)
 
-def _normalize_text(s: str) -> str:
-    if s is None:
-        return ""
-    s = str(s).replace("\n", " ").lower().strip()
-    return _ws_rx.sub(" ", s)
+# ----------------------------
+# Load cuML LR/NB params
+# ----------------------------
+lr_params = np.load(os.path.join(MODEL_DIR, "cuml_lr_params_v1.npz"), allow_pickle=True)
+nb_params = np.load(os.path.join(MODEL_DIR, "cuml_nb_params_v1.npz"), allow_pickle=True)
 
-def _tok(x: str) -> str:
-    x = "" if x is None else str(x).strip().lower()
-    return _ws_rx.sub("_", x)
+# ----------------------------
+# Load regressors (LightGBM + XGBoost)
+# ----------------------------
+LGBM_MODEL_PATH = os.path.join(MODEL_DIR, "lgbm_model.txt")
+XGB_MODEL_PATH  = os.path.join(MODEL_DIR, "xgb_model.json")
 
-def _build_itemdesc_meta(description: str, uom: str | None, core_market: str | None) -> str:
+HAS_LGB = os.path.exists(LGBM_MODEL_PATH)
+HAS_XGB = os.path.exists(XGB_MODEL_PATH)
+
+if HAS_LGB:
+    import lightgbm as lgb
+    lgbm = lgb.Booster(model_file=LGBM_MODEL_PATH)
+else:
+    lgbm = None
+
+if HAS_XGB:
+    import xgboost as xgb
+    bst = xgb.Booster()
+    bst.load_model(XGB_MODEL_PATH)
+else:
+    bst = None
+
+# ----------------------------
+# Load priors / memorizer maps
+# ----------------------------
+ratio_item_uom = joblib.load(os.path.join(MODEL_DIR, "ratio_item_uom.pkl"))
+ratio_item     = joblib.load(os.path.join(MODEL_DIR, "ratio_item.pkl"))
+ratio_global   = joblib.load(os.path.join(MODEL_DIR, "ratio_global.pkl"))
+item_qty_median= joblib.load(os.path.join(MODEL_DIR, "item_qty_median.pkl"))
+global_mode_int= joblib.load(os.path.join(MODEL_DIR, "global_mode_int.pkl"))
+
+mem_duc = joblib.load(os.path.join(MODEL_DIR, "mem_duc.pkl"))
+mem_du  = joblib.load(os.path.join(MODEL_DIR, "mem_du.pkl"))
+mem_d   = joblib.load(os.path.join(MODEL_DIR, "mem_d.pkl"))
+
+# ----------------------------
+# Simple predict pipeline stub
+# ----------------------------
+def predict_pipeline(description: str, uom: str = None, core_market: str = None):
     """
-    EXACTLY the same token shape used in training:
-      normalized base + optional tokens + __memo_tier=none
+    This is a lightweight stub that demonstrates
+    how you'd call your trained models with the GPU artifacts.
+    Replace this with your full preprocessing + inference.
     """
-    base = _normalize_text(description or "")
-    parts = [base]
-    if uom:
-        parts.append(f" __uom={_tok(uom)}")
-    if core_market:
-        parts.append(f" __core_market={_tok(core_market)}")
-    parts.append(" __memo_tier=none")  # train had "none"
-    return "".join(parts)
 
-# ------------------- Load artifacts (CPU) -------------------
-# TF-IDF + classifiers + label encoder (all sklearn)
-tfidf_word = joblib.load(os.path.join(MODEL_DIR, "tfidf_word_sklearn.pkl"))
-tfidf_char = joblib.load(os.path.join(MODEL_DIR, "tfidf_char_sklearn.pkl"))
-lr         = joblib.load(os.path.join(MODEL_DIR, "lr_model_sklearn.pkl"))
-nb         = joblib.load(os.path.join(MODEL_DIR, "nb_model_sklearn.pkl"))
-le         = joblib.load(os.path.join(MODEL_DIR, "label_encoder_sklearn.pkl"))
+    # NOTE: At the moment we just return dummy values
+    # because the full cuML vectorizer / LR/NB rebuild
+    # is GPU-only. On Render (CPU-only), you’d normally
+    # fallback to a CPU-mirror model.
+    #
+    # Since you uploaded *only GPU artifacts*, here we show
+    # how to use priors as a placeholder.
 
-# Priors / maps
-ratio_item_uom  = joblib.load(os.path.join(MODEL_DIR, "ratio_item_uom.pkl"))
-ratio_item      = joblib.load(os.path.join(MODEL_DIR, "ratio_item.pkl"))
-ratio_global    = joblib.load(os.path.join(MODEL_DIR, "ratio_global.pkl"))
-item_qty_median = joblib.load(os.path.join(MODEL_DIR, "item_qty_median.pkl"))
-global_mode_int = joblib.load(os.path.join(MODEL_DIR, "global_mode_int.pkl"))
+    desc_key = description.lower().strip()
+    uom_key  = str(uom or "").upper()
+    cm_key   = str(core_market or "").upper()
 
-# Optional: cat_maps exist but aren’t needed for the current “priors-only” qty path
-# cat_maps = joblib.load(os.path.join(MODEL_DIR, "cat_maps.pkl"))
-
-# NOTE: We don’t import LightGBM/XGBoost here to keep inference light & portable.
-# If you later want full regression features, you can lazy-load and wire them.
-
-# ------------------- Inference -------------------
-def predict_pipeline(description: str,
-                     uom: str | None = None,
-                     core_market: str | None = None):
-    """
-    Returns (MasterItemNo:int, QtyShipped:float)
-    - Classification: TF-IDF -> (0.7 * LR + 0.3 * NB)
-    - Quantity: priors (item+uom -> item -> global) — fast & robust
-    """
-    # 1) Build meta-augmented text exactly as in training
-    meta_text = _build_itemdesc_meta(description, uom, core_market)
-
-    # 2) Vectorize
-    Xw = tfidf_word.transform([meta_text])
-    Xc = tfidf_char.transform([meta_text])
-    Xt = hstack([Xw, Xc], format="csr")
-
-    # 3) Classification ensemble
-    proba_lr = lr.predict_proba(Xt)
-    proba_nb = nb.predict_proba(Xt)
-    proba = 0.7 * proba_lr + 0.3 * proba_nb
-    pred_idx = int(np.argmax(proba, axis=1)[0])
-
-    # The label encoder was fit on MasterItemNo strings during training
-    pred_master_str = le.inverse_transform([pred_idx])[0]
-    try:
-        master_item = int(float(pred_master_str))
-    except Exception:
-        # Fallback: use global mode if the label is somehow non-numeric
+    # Try memorizer maps
+    master_item = (
+        mem_duc.get((desc_key, uom_key, cm_key))
+        or mem_du.get((desc_key, uom_key))
+        or mem_d.get(desc_key)
+    )
+    if master_item is None:
         master_item = int(global_mode_int)
 
-    # 4) Quantity via priors (fast)
-    # Prefer (item, uom) prior if UOM is present, otherwise item, else global.
-    ratio = None
-    if uom:
-        ratio = ratio_item_uom.get((str(master_item), str(uom)))
-    if ratio is None or not np.isfinite(ratio):
-        ratio = ratio_item.get(str(master_item))
-    if ratio is None or not np.isfinite(ratio):
-        ratio = float(ratio_global)
+    # Use priors for qty
+    qty = ratio_item.get(str(master_item), ratio_global)
+    qty = float(qty) if qty is not None else float(item_qty_median.get(master_item, 1.0))
 
-    qty = float(ratio) * 1.0  # If you add ExtendedQuantity in the request, multiply here.
-
-    if not np.isfinite(qty) or qty <= 0:
-        qty = float(item_qty_median.get(str(master_item), 1.0))
-
-    return master_item, qty
+    return int(master_item), qty
