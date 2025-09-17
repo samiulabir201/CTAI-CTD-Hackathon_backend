@@ -9,7 +9,7 @@ app = FastAPI(title="CTAI - CTD Hackathon Backend")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://ctai-ctd-hackathon-frontend.vercel.app",  # replace with your real Vercel domain
+        "https://ctai-ctd-hackathon-frontend.vercel.app/"
         "http://localhost:3000",             # for local dev
     ],
     allow_credentials=True,
