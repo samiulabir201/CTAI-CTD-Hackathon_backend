@@ -1,38 +1,40 @@
 # api/index.py
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-import os
 
-# Import pipeline from root of /app
 from pipeline import predict_pipeline
 
 app = FastAPI(title="CTAI - CTD Hackathon Backend")
 
-# -----------------------------
-# Request schema
-# -----------------------------
+# --- CORS (this is the one Render actually runs) ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://ctai-ctd-hackathon-frontend.vercel.app",  # your Vercel domain
+        "http://localhost:3000",                            # local dev
+    ],
+    allow_credentials=False,             # set True only if you use cookies/auth
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=[],
+    max_age=600,                         # cache preflight for 10 minutes
+)
+
 class InputData(BaseModel):
     description: str
     uom: Optional[str] = None
     core_market: Optional[str] = None
 
-# -----------------------------
-# Health check
-# -----------------------------
 @app.get("/")
 def root():
     return {"message": "CTAI - CTD Hackathon Backend is running!"}
 
-# -----------------------------
-# Predict endpoint
-# -----------------------------
 @app.post("/predict")
 def predict(data: InputData):
     master_item, qty = predict_pipeline(
-        data.description,
-        data.uom,
-        data.core_market,
+        data.description, data.uom, data.core_market
     )
     return {
         "MasterItemNo": master_item,
@@ -41,12 +43,7 @@ def predict(data: InputData):
         "core_market": data.core_market,
     }
 
-
-# -----------------------------
-# Run locally (optional)
-# -----------------------------
+# For local runs
 if __name__ == "__main__":
-    import uvicorn
-
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("api.index:app", host="0.0.0.0", port=port, reload=False)
+    import os, uvicorn
+    uvicorn.run("api.index:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
